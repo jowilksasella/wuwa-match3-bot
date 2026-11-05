@@ -1,6 +1,13 @@
-"""Read the 8x7 board from a 1280x720 BGR frame."""
+"""Read the 8x7 board from a 1280x720 BGR frame on the local GPU.
+
+Plain colour thresholds run as tensor operations. There is no model and no
+network access; PyTorch is used only as a GPU array library.
+"""
+import os
+
 import cv2
 import numpy as np
+import torch
 
 ROWS, COLS = 7, 8
 X0, DX, Y0, DY = 620.0, 82.3, 130.0, 81.7
@@ -9,74 +16,108 @@ G, M, R, B, W, U, X = 0, 1, 2, 3, 4, 5, -1   # green, mask, red, blue, white, ul
 NONE, BOMB, CROSS = 0, 1, 2
 NAMES = {G: "G", M: "M", R: "R", B: "B", W: "W", U: "U", X: "?"}
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE_NAME = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU (no CUDA GPU found)"
+
 
 def cell_xy(r, c):
     return int(round(X0 + c * DX)), int(round(Y0 + r * DY))
 
 
-def _frac(h, lo, hi):
-    return float(((h >= lo) & (h < hi)).mean()) if h.size else 0.0
+_CX = torch.tensor([cell_xy(r, c)[0] for r in range(ROWS) for c in range(COLS)], device=DEVICE)
+_CY = torch.tensor([cell_xy(r, c)[1] for r in range(ROWS) for c in range(COLS)], device=DEVICE)
 
 
-def classify(hsv, x, y):
-    c = hsv[y - 26:y + 26, x - 26:x + 26].reshape(-1, 3)
-    white = float(((c[:, 1] < 50) & (c[:, 2] > 200)).mean())
-    m = (c[:, 1] > 70) & (c[:, 2] > 100)
-    cover = float(m.mean())
-    if cover + white < 0.25:
-        return X
-    h = c[m, 0]
-    pink = _frac(h, 135, 172)
-    if pink > 0.30 and white > 0.08:
-        return U
-    if white > 0.25:
-        return W
-    scores = {
-        R: _frac(h, 0, 13) + _frac(h, 172, 180),
-        M: _frac(h, 13, 33) + _frac(h, 115, 150),
-        G: _frac(h, 35, 85),
-        B: _frac(h, 85, 115),
-    }
-    best = max(scores, key=scores.get)
-    return best if scores[best] > 0.35 else X
+def _hsv(bgr):
+    """BGR uint8 tensor to float HSV on OpenCV's 8-bit scale (H 0-179, S and V 0-255)."""
+    t = bgr.float()
+    b, g, r = t[..., 0], t[..., 1], t[..., 2]
+    v = t.max(-1).values
+    d = v - t.min(-1).values
+    safe = d.clamp(min=1e-6)
+    h = torch.where(v == r, 60 * (g - b) / safe,
+                    torch.where(v == g, 120 + 60 * (b - r) / safe, 240 + 60 * (r - g) / safe))
+    h = torch.where(d == 0, torch.zeros_like(h), h)
+    h = torch.round(torch.where(h < 0, h + 360, h) / 2) % 180
+    s = torch.round(255 * d / v.clamp(min=1e-6))
+    return torch.stack((h, s, v), -1)
 
 
-def _yellow(hsv, x0, y0, x1, y1):
-    p = hsv[y0:y1, x0:x1].reshape(-1, 3)
-    return int(((p[:, 0] > 20) & (p[:, 0] < 35) & (p[:, 1] > 170) & (p[:, 2] > 210)).sum())
+def _patches(t, box):
+    """Cut the same (x0, y0, x1, y1) offset box out of every cell; returns one row per cell."""
+    x0, y0, x1, y1 = box
+    ys = _CY[:, None, None] + torch.arange(y0, y1, device=DEVICE)[None, :, None]
+    xs = _CX[:, None, None] + torch.arange(x0, x1, device=DEVICE)[None, None, :]
+    p = t[ys, xs]
+    return p.reshape(p.shape[0], (y1 - y0) * (x1 - x0), *p.shape[3:])
 
 
-def special_of(hsv, x, y):
+def _classify(hsv):
+    c = _patches(hsv, (-26, -26, 26, 26))
+    h, s, v = c[..., 0], c[..., 1], c[..., 2]
+    white = ((s < 50) & (v > 200)).float().mean(1)
+    m = (s > 70) & (v > 100)
+    n = m.sum(1).clamp(min=1).float()
+
+    def frac(lo, hi):
+        return ((h >= lo) & (h < hi) & m).sum(1).float() / n
+
+    pink = frac(135, 172)
+    # Stack order matches the class ids G=0, M=1, R=2, B=3.
+    scores = torch.stack((frac(35, 85), frac(13, 33) + frac(115, 150),
+                          frac(0, 13) + frac(172, 180), frac(85, 115)), 1)
+    best, top = scores.argmax(1), scores.max(1).values
+    out = torch.where(top > 0.35, best, torch.full_like(best, X))
+    out = torch.where(white > 0.25, torch.full_like(out, W), out)
+    out = torch.where((pink > 0.30) & (white > 0.08), torch.full_like(out, U), out)
+    return torch.where(m.float().mean(1) + white < 0.25, torch.full_like(out, X), out)
+
+
+def _specials(hsv):
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    yellow = (h > 20) & (h < 35) & (s > 170) & (v > 210)
+
+    def count(box):
+        return _patches(yellow, box).sum(1)
+
     # The idle hint draws a yellow frame around whole cells; an arrow is yellow
     # only at the middle of an edge, so a yellow edge away from the middle is a frame.
     # The band sits on this cell's own frame so a neighbour's frame is not counted.
-    if (_yellow(hsv, x - 26, y - 41, x - 12, y - 34) + _yellow(hsv, x + 12, y + 34, x + 26, y + 41)
-            + _yellow(hsv, x - 41, y + 12, x - 34, y + 26) + _yellow(hsv, x + 34, y - 26, x + 41, y - 12)) >= 16:
-        return NONE
+    frame = (count((-26, -41, -12, -34)) + count((12, 34, 26, 41))
+             + count((-41, 12, -34, 26)) + count((34, -26, 41, -12))) >= 16
     edges = ((-10, -46, 10, -32), (-10, 32, 10, 46), (-46, -10, -32, 10), (32, -10, 46, 10))
-    edge = sum(1 for b in edges if _yellow(hsv, x + b[0], y + b[1], x + b[2], y + b[3]) >= 8)
     corners = ((-42, -42, -28, -28), (28, -42, 42, -28), (-42, 28, -28, 42), (28, 28, 42, 42))
-    corner = sum(1 for b in corners if _yellow(hsv, x + b[0], y + b[1], x + b[2], y + b[3]) >= 8)
-    if edge >= 3:
-        return CROSS
-    if corner >= 3:
-        return BOMB
-    return NONE
+    edge = sum((count(b) >= 8).int() for b in edges)
+    corner = sum((count(b) >= 8).int() for b in corners)
+    out = torch.where(corner >= 3, torch.full_like(edge, BOMB), torch.full_like(edge, NONE))
+    out = torch.where(edge >= 3, torch.full_like(edge, CROSS), out)
+    return torch.where(frame, torch.full_like(edge, NONE), out)
 
 
+@torch.inference_mode()
 def read_board(img):
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    colors, specials = [], []
-    for r in range(ROWS):
-        cr, sr = [], []
-        for c in range(COLS):
-            x, y = cell_xy(r, c)
-            k = classify(hsv, x, y)
-            cr.append(k)
-            sr.append(special_of(hsv, x, y) if k not in (X, U) else NONE)
-        colors.append(cr)
-        specials.append(sr)
-    return colors, specials
+    hsv = _hsv(torch.from_numpy(img).to(DEVICE))
+    k = _classify(hsv)
+    s = _specials(hsv)
+    s = torch.where((k == X) | (k == U), torch.full_like(s, NONE), s)
+    k, s = k.tolist(), s.tolist()
+    return ([k[r * COLS:(r + 1) * COLS] for r in range(ROWS)],
+            [s[r * COLS:(r + 1) * COLS] for r in range(ROWS)])
+
+
+_BTN_BOX = (20, 52, 950, 1082)   # y0, y1, x0, x1 of the effects-panel button
+_btn = cv2.imdecode(np.fromfile(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                             "assets", "button.png"), np.uint8), 1).astype(int)
+
+
+def in_level(img):
+    """True only on the live board: the HUD button and the panel border are both undimmed."""
+    y0, y1, x0, x1 = _BTN_BOX
+    if np.abs(img[y0:y1, x0:x1].astype(int) - _btn).mean() > 15:
+        return False
+    border = (np.median(img[680:684, 600:1220].reshape(-1, 3), axis=0),
+              np.median(img[120:640, 1254:1258].reshape(-1, 3), axis=0))
+    return all(np.abs(b - ref).max() <= 18 for b, ref in zip(border, ((66, 55, 134), (74, 57, 141))))
 
 
 def fmt(colors, specials):
