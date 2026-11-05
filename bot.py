@@ -23,6 +23,7 @@ from win import find_window, geometry
 
 VK_F8 = 0x77
 MAX_UNKNOWN = 8
+TURN_TIMEOUT = 6.0     # a rejected swap never changes the counter
 _last_status = None
 
 
@@ -70,6 +71,30 @@ def stable_board(hwnd, tries=7, gap=0.18):
 
 def unknown_count(g):
     return sum(k == vision.X for row in g for k in row)
+
+
+def bottles(g, s):
+    return sorted((s[r][c] - vision.HEARTS for r in range(vision.ROWS) for c in range(vision.COLS)
+                   if g[r][c] == vision.E), reverse=True)
+
+
+def wait_resolved(hwnd, before):
+    """After a drag, wait for the turn counter to change.
+
+    The game drops input while a chain resolves, and chains pause long enough to
+    look settled, so elapsed time and a still board do not prove the turn is over.
+    Returns "done", "ended" (left the level), "timeout" (swap rejected) or "stop" (F8).
+    """
+    end = time.time() + TURN_TIMEOUT
+    while time.time() < end:
+        if wait(0.15):
+            return "stop"
+        img = grab(hwnd)
+        if not vision.in_level(img):
+            return "ended"
+        if vision.turn_changed(before, vision.turn_crop(img)):
+            return "done"
+    return "timeout"
 
 
 def ready(hwnd):
@@ -123,10 +148,13 @@ def play(hwnd, max_moves, settle):
         status("關卡進行中")
         a, b = mv
         played += 1
-        print(f"  第 {played} 步 {a}->{b} 評分 {val:.1f}", flush=True)
+        left = bottles(g, s)
+        print(f"  第 {played} 步 {a}->{b} 評分 {val:.1f}" + (f" 能量瓶剩餘心數 {left}" if left else ""), flush=True)
+        before = vision.turn_crop(grab(hwnd))
         inputs.drag(hwnd, *vision.cell_xy(*a), *vision.cell_xy(*b))
         prev_g, last = g, mv
-        if wait(settle):
+        result = wait_resolved(hwnd, before)
+        if result == "stop" or wait(settle):
             return played
     return played
 
@@ -135,7 +163,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--moves", type=int, default=0, help="quit after N moves; 0 = no limit")
-    ap.add_argument("--settle", type=float, default=2.2)
+    ap.add_argument("--settle", type=float, default=1.2, help="seconds to wait after the turn counter changes")
     args = ap.parse_args()
     print("讀圖裝置:", vision.DEVICE_NAME, flush=True)
     hwnd = find_window()

@@ -5,12 +5,19 @@ Rules (in-game effects panel):
   T/L shape, 5+ cells -> cross: clears its row and column when eliminated
   straight 5+         -> ultimate: swapped with a piece, clears that piece's type;
                          two ultimates swapped clear the whole board
+  energy bottle       -> removed after three eliminations around it, gives 80 energy;
+                         it is the goal of some levels
+
 Refill is unknown, so the simulation applies gravity without new pieces.
+Bottles are modelled from the panel text: they are never dragged, never match,
+and lose one heart per elimination step that touches an orthogonal neighbour or
+blasts their cell.
 """
-from vision import ROWS, COLS, U, X, NONE, BOMB, CROSS
+from vision import ROWS, COLS, U, E, X, NONE, BOMB, CROSS, HEARTS
 
 EMPTY = -2
 BONUS = {BOMB: 4.0, CROSS: 7.0, "U": 12.0}
+BOTTLE_HIT, BOTTLE_POP = 8.0, 16.0     # worth more than any plain match
 
 
 def _runs(g):
@@ -22,7 +29,7 @@ def _runs(g):
             e = c
             while e + 1 < COLS and g[r][e + 1] == k:
                 e += 1
-            if k >= 0 and k != U and e - c >= 2:
+            if k >= 0 and k not in (U, E) and e - c >= 2:
                 runs.append(("h", [(r, i) for i in range(c, e + 1)]))
             c = e + 1
     for c in range(COLS):
@@ -32,7 +39,7 @@ def _runs(g):
             e = r
             while e + 1 < ROWS and g[e + 1][c] == k:
                 e += 1
-            if k >= 0 and k != U and e - r >= 2:
+            if k >= 0 and k not in (U, E) and e - r >= 2:
                 runs.append(("v", [(i, c) for i in range(r, e + 1)]))
             r = e + 1
     return runs
@@ -68,6 +75,7 @@ def _kind(gr):
 
 
 def _blast(g, s, clear):
+    """Grow a clear set through special pieces; bottles in the area are kept for _hit."""
     todo = list(clear)
     seen = set(clear)
     while todo:
@@ -80,10 +88,28 @@ def _blast(g, s, clear):
         else:
             continue
         for p in area:
-            if 0 <= p[0] < ROWS and 0 <= p[1] < COLS and p not in seen and g[p[0]][p[1]] >= 0:
+            if 0 <= p[0] < ROWS and 0 <= p[1] < COLS and p not in seen and g[p[0]][p[1]] not in (X, EMPTY, E):
                 seen.add(p)
                 todo.append(p)
     return seen
+
+
+def _hit(g, s, cleared):
+    """Take one heart from each bottle touched by this step; returns the score."""
+    bonus = 0.0
+    for r in range(ROWS):
+        for c in range(COLS):
+            if g[r][c] != E or (r, c) in cleared:
+                continue
+            near = ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1))
+            if not any(p in cleared for p in near):
+                continue
+            s[r][c] -= 1
+            bonus += BOTTLE_HIT
+            if s[r][c] <= HEARTS:
+                g[r][c], s[r][c] = EMPTY, NONE
+                bonus += BOTTLE_POP
+    return bonus
 
 
 def _gravity(g, s):
@@ -110,18 +136,19 @@ def simulate(g0, s0, a, b):
     s = [row[:] for row in s0]
     (r1, c1), (r2, c2) = a, b
     k1, k2 = g[r1][c1], g[r2][c2]
-    if k1 == X or k2 == X:
+    if k1 in (X, E) or k2 in (X, E):
         return None
     total = bonus = 0.0
     if U in (k1, k2):
         if k1 == k2:
-            cells = {(r, c) for r in range(ROWS) for c in range(COLS) if g[r][c] >= 0}
+            cells = {(r, c) for r in range(ROWS) for c in range(COLS) if g[r][c] not in (X, E)}
         else:
             target = k2 if k1 == U else k1
             cells = {(r, c) for r in range(ROWS) for c in range(COLS) if g[r][c] == target}
             cells |= {a, b}
         cells = _blast(g, s, cells)
         total += len(cells)
+        bonus += _hit(g, s, cells)
         _clear(g, s, cells)
         _gravity(g, s)
     else:
@@ -145,6 +172,7 @@ def simulate(g0, s0, a, b):
             bonus += BONUS[kind]
         hit = _blast(g, s, clear)
         total += len(hit)
+        bonus += _hit(g, s, hit)
         _clear(g, s, hit)
         for (r, c), kind, color in spawns:
             if kind == "U":

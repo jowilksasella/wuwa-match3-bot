@@ -12,9 +12,11 @@ import torch
 ROWS, COLS = 7, 8
 X0, DX, Y0, DY = 620.0, 82.3, 130.0, 81.7
 
-G, M, R, B, W, U, X = 0, 1, 2, 3, 4, 5, -1   # green, mask, red, blue, white, ultimate, unknown
+# green, mask, red, blue, white, ultimate, energy bottle, unknown
+G, M, R, B, W, U, E, X = 0, 1, 2, 3, 4, 5, 6, -1
 NONE, BOMB, CROSS = 0, 1, 2
-NAMES = {G: "G", M: "M", R: "R", B: "B", W: "W", U: "U", X: "?"}
+HEARTS = 10     # a bottle's special value is HEARTS + its remaining hits
+NAMES = {G: "G", M: "M", R: "R", B: "B", W: "W", U: "U", E: "E", X: "?"}
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEVICE_NAME = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU (no CUDA GPU found)"
@@ -63,14 +65,25 @@ def _classify(hsv):
         return ((h >= lo) & (h < hi) & m).sum(1).float() / n
 
     pink = frac(135, 172)
+    cyan = frac(85, 115)
     # Stack order matches the class ids G=0, M=1, R=2, B=3.
     scores = torch.stack((frac(35, 85), frac(13, 33) + frac(115, 150),
                           frac(0, 13) + frac(172, 180), frac(85, 115)), 1)
     best, top = scores.argmax(1), scores.max(1).values
     out = torch.where(top > 0.35, best, torch.full_like(best, X))
     out = torch.where(white > 0.25, torch.full_like(out, W), out)
-    out = torch.where((pink > 0.30) & (white > 0.08), torch.full_like(out, U), out)
+    # Both are pink with white highlights: only the ultimate has cyan stripes.
+    out = torch.where((pink > 0.30) & (white > 0.08) & (cyan >= 0.03), torch.full_like(out, U), out)
+    out = torch.where((pink > 0.45) & (white > 0.15) & (cyan < 0.03), torch.full_like(out, E), out)
     return torch.where(m.float().mean(1) + white < 0.25, torch.full_like(out, X), out)
+
+
+def _hearts(hsv):
+    """Count filled heart slots above a bottle; a used slot is empty, not dimmed."""
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    gold = (h > 15) & (h < 35) & (s > 150) & (v > 180)
+    slots = ((-17, -33, -3, -14), (0, -33, 14, -14), (16, -33, 30, -14))
+    return sum((_patches(gold, b).sum(1) >= 20).int() for b in slots).clamp(min=1)
 
 
 def _specials(hsv):
@@ -100,6 +113,7 @@ def read_board(img):
     k = _classify(hsv)
     s = _specials(hsv)
     s = torch.where((k == X) | (k == U), torch.full_like(s, NONE), s)
+    s = torch.where(k == E, HEARTS + _hearts(hsv), s)
     k, s = k.tolist(), s.tolist()
     return ([k[r * COLS:(r + 1) * COLS] for r in range(ROWS)],
             [s[r * COLS:(r + 1) * COLS] for r in range(ROWS)])
@@ -120,7 +134,16 @@ def in_level(img):
     return all(np.abs(b - ref).max() <= 18 for b, ref in zip(border, ((66, 55, 134), (74, 57, 141))))
 
 
+def turn_crop(img):
+    """The digits of the remaining-turns counter, which changes only when a move has fully resolved."""
+    return img[118:148, 156:192].astype(int)
+
+
+def turn_changed(a, b):
+    return float(np.abs(a - b).mean()) > 14
+
+
 def fmt(colors, specials):
     mark = {NONE: " ", BOMB: "*", CROSS: "+"}
-    return "\n".join(" ".join(NAMES[k] + mark[s] for k, s in zip(a, b))
+    return "\n".join(" ".join(NAMES[k] + mark.get(s, str(s - HEARTS)) for k, s in zip(a, b))
                      for a, b in zip(colors, specials))
