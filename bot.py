@@ -7,9 +7,11 @@ for --idle seconds (level finished, popup, etc.).
     python bot.py --moves 3     play at most 3 moves
 """
 import argparse
+import os
 import sys
 import time
 
+import cv2
 import win32api
 import win32gui
 
@@ -23,12 +25,20 @@ VK_F8 = 0x77
 
 
 def stable_board(hwnd, tries=7, gap=0.18):
-    """Return (colors, specials) once two consecutive reads agree, else None."""
-    prev = None
-    for _ in range(tries):
+    """Return (colors, specials) once three consecutive reads agree, else None.
+
+    Special-piece arrows pulse, so a piece counts as special if any read saw it.
+    """
+    prev, agree, seen = None, 0, None
+    for _ in range(tries + 2):
         g, s = vision.read_board(grab(hwnd))
-        if prev == g:
-            return g, s
+        if g == prev:
+            agree += 1
+            seen = [[max(a, b) for a, b in zip(x, y)] for x, y in zip(seen, s)]
+        else:
+            agree, seen = 0, s
+        if agree >= 2:
+            return g, seen
         prev = g
         time.sleep(gap)
     return None
@@ -93,6 +103,8 @@ def main():
             time.sleep(args.settle)
     finally:
         win32api.SetCursorPos(saved)
+        os.makedirs("captures", exist_ok=True)
+        cv2.imencode(".png", grab(hwnd))[1].tofile("captures/last_stop.png")
     print("played", played)
 
 

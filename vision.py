@@ -49,8 +49,9 @@ def _yellow(hsv, x0, y0, x1, y1):
 def special_of(hsv, x, y):
     # The idle hint draws a yellow frame around whole cells; an arrow is yellow
     # only at the middle of an edge, so a yellow edge away from the middle is a frame.
-    if (_yellow(hsv, x - 24, y - 46, x - 12, y - 32) + _yellow(hsv, x + 12, y + 32, x + 24, y + 46)
-            + _yellow(hsv, x - 46, y + 12, x - 32, y + 24) + _yellow(hsv, x + 32, y - 24, x + 46, y - 12)) >= 12:
+    # The band sits on this cell's own frame so a neighbour's frame is not counted.
+    if (_yellow(hsv, x - 26, y - 41, x - 12, y - 34) + _yellow(hsv, x + 12, y + 34, x + 26, y + 41)
+            + _yellow(hsv, x - 41, y + 12, x - 34, y + 26) + _yellow(hsv, x + 34, y - 26, x + 41, y - 12)) >= 16:
         return NONE
     edges = ((-10, -46, 10, -32), (-10, 32, 10, 46), (-46, -10, -32, 10), (32, -10, 46, 10))
     edge = sum(1 for b in edges if _yellow(hsv, x + b[0], y + b[1], x + b[2], y + b[3]) >= 8)
