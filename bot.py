@@ -100,13 +100,13 @@ def wait_resolved(hwnd, before):
 def ready(hwnd):
     """Name what blocks play right now, or return None when the bot may act."""
     if not win32gui.IsWindow(hwnd):
-        return "遊戲視窗已關閉"
+        return "游戏窗口已关闭"
     if win32gui.GetForegroundWindow() != hwnd:
-        return "暫停：遊戲不在前景"
+        return "暂停：游戏不在前景"
     if geometry(hwnd)[2:] != (1280, 720):
-        return "暫停：遊戲畫面必須是 1280x720"
+        return "暂停：游戏画面必须是 1280x720"
     if not vision.in_level(grab(hwnd)):
-        return "等待進入關卡"
+        return "等待进入关卡"
     return None
 
 
@@ -128,7 +128,7 @@ def play(hwnd, max_moves, settle, trace=False):
         g, s = res
         missing = unknown_count(g)
         if missing > MAX_UNKNOWN:
-            status(f"等待：有 {missing} 格認不出")
+            status(f"等待：有 {missing} 格认不出")
             if wait(0.4):
                 return played
             continue
@@ -145,13 +145,13 @@ def play(hwnd, max_moves, settle, trace=False):
             continue
         if ready(hwnd):      # a popup or focus change may have arrived during the reads
             continue
-        status("關卡進行中")
+        status("关卡进行中")
         a, b = mv
         played += 1
         left = bottles(g, s)
         if trace:
             print(vision.fmt(g, s), flush=True)
-        print(f"  第 {played} 步 {a}->{b} 評分 {val:.1f}" + (f" 能量瓶剩餘心數 {left}" if left else ""), flush=True)
+        print(f"  第 {played} 步 {a}->{b} 评分 {val:.1f}" + (f" 能量瓶剩余心数 {left}" if left else ""), flush=True)
         before = vision.turn_crop(grab(hwnd))
         inputs.drag(hwnd, *vision.cell_xy(*a), *vision.cell_xy(*b))
         prev_g, last = g, mv
@@ -168,10 +168,10 @@ def main():
     ap.add_argument("--settle", type=float, default=1.2, help="seconds to wait after the turn counter changes")
     ap.add_argument("--trace", action="store_true", help="print the board before every move")
     args = ap.parse_args()
-    print("讀圖裝置:", vision.DEVICE_NAME, flush=True)
+    print("读图设备:", vision.DEVICE_NAME, flush=True)
     hwnd = find_window()
     while not hwnd:
-        status("等待遊戲視窗")
+        status("等待游戏窗口")
         if wait(1.0):
             return
         hwnd = find_window()
@@ -184,9 +184,9 @@ def main():
         print(vision.fmt(g, s))
         print("move", solver.best_move(g, s))
         return
-    print("已啟動，按 F8 結束。請在遊戲裏揀關卡。", flush=True)
+    print("已启动，按 F8 结束。请在游戏里拣关卡。", flush=True)
     played = play(hwnd, args.moves, args.settle, args.trace)
-    print("結束，共走", played, "步")
+    print("结束，共走", played, "步")
 
 
 if __name__ == "__main__":

@@ -8,5 +8,7 @@ if errorlevel 1 (
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
-"C:\ProgramData\miniconda3\python.exe" bot.py
+set PY=python
+if exist "C:\ProgramData\miniconda3\python.exe" set PY="C:\ProgramData\miniconda3\python.exe"
+%PY% bot.py
 pause
