@@ -1,6 +1,6 @@
 """Rule checks for the solver: python test_solver.py"""
 import solver
-from vision import ROWS, COLS, G, R, B, W, M, E, U, X, NONE, HEARTS
+from vision import ROWS, COLS, G, R, B, W, M, E, ICE, U, X, NONE, HEARTS
 
 
 
@@ -54,6 +54,29 @@ def main():
     bottle(g, s, 5, 1, 3)
     mv, _ = solver.best_move(g, s)
     assert mv in (((5, 2), (6, 2)),), mv
+    # One step beside ice removes it; a diagonal step does not.
+    g, s = board({(3, 3): ICE})
+    assert solver._hit(g, s, {(3, 4)}) == solver.ICE_HIT and g[3][3] == solver.EMPTY
+    g, s = board({(3, 3): ICE})
+    assert solver._hit(g, s, {(2, 2)}) == 0 and g[3][3] == ICE
+
+    # Ice never falls, holds up what is above it, and cannot be dragged or matched.
+    g, s = board({(3, 3): ICE, (4, 3): solver.EMPTY})
+    above = g[2][3]
+    solver._gravity(g, s)
+    assert g[3][3] == ICE and g[2][3] == above and g[4][3] == solver.EMPTY
+    g, s = board({(3, 3): ICE})
+    assert solver.simulate(g, s, (3, 3), (3, 4)) is None
+    g, s = board({(6, 0): ICE, (6, 1): ICE, (6, 2): ICE})
+    assert not solver._groups(g)
+
+    # Clearing beside ice scores more than the same clear without it.
+    cells = {(6, 0): R, (6, 1): R, (5, 2): R}
+    g, s = board(cells)
+    plain = solver.simulate(g, s, (5, 2), (6, 2))
+    g, s = board({**cells, (5, 0): ICE})
+    assert solver.simulate(g, s, (5, 2), (6, 2)) > plain
+
     print("solver rules ok")
 
 

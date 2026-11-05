@@ -110,7 +110,7 @@ def ready(hwnd):
     return None
 
 
-def play(hwnd, max_moves, settle):
+def play(hwnd, max_moves, settle, trace=False):
     played, banned, prev_g, last = 0, set(), None, None
     while not max_moves or played < max_moves:
         if f8_pressed():
@@ -149,6 +149,8 @@ def play(hwnd, max_moves, settle):
         a, b = mv
         played += 1
         left = bottles(g, s)
+        if trace:
+            print(vision.fmt(g, s), flush=True)
         print(f"  第 {played} 步 {a}->{b} 評分 {val:.1f}" + (f" 能量瓶剩餘心數 {left}" if left else ""), flush=True)
         before = vision.turn_crop(grab(hwnd))
         inputs.drag(hwnd, *vision.cell_xy(*a), *vision.cell_xy(*b))
@@ -164,6 +166,7 @@ def main():
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--moves", type=int, default=0, help="quit after N moves; 0 = no limit")
     ap.add_argument("--settle", type=float, default=1.2, help="seconds to wait after the turn counter changes")
+    ap.add_argument("--trace", action="store_true", help="print the board before every move")
     args = ap.parse_args()
     print("讀圖裝置:", vision.DEVICE_NAME, flush=True)
     hwnd = find_window()
@@ -182,7 +185,7 @@ def main():
         print("move", solver.best_move(g, s))
         return
     print("已啟動，按 F8 結束。請在遊戲裏揀關卡。", flush=True)
-    played = play(hwnd, args.moves, args.settle)
+    played = play(hwnd, args.moves, args.settle, args.trace)
     print("結束，共走", played, "步")
 
 
