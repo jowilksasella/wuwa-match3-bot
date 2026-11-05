@@ -1,6 +1,6 @@
 """Rule checks for the solver: python test_solver.py"""
 import solver
-from vision import ROWS, COLS, G, R, B, W, M, E, ICE, HOUR, U, X, NONE, HEARTS
+from vision import ROWS, COLS, G, R, B, W, M, E, ICE, HOUR, U, X, NONE, HEARTS, CHAIN, BOMB, CROSS
 
 
 
@@ -95,6 +95,53 @@ def main():
     assert not solver._groups(g)
     g, s = board({(3, 3): U, (3, 4): HOUR})
     assert solver.simulate(g, s, (3, 3), (3, 4)) is None
+
+    # Eliminating one chained piece takes the rest of its set with it.
+    g, s = board({})
+    for p in ((0, 0), (3, 3), (6, 7)):
+        s[p[0]][p[1]] = CHAIN
+    assert solver._blast(g, s, {(0, 0)}) == {(0, 0), (3, 3), (6, 7)}
+
+    # The set shares bomb and cross effects, wherever they started.
+    g, s = board({})
+    s[0][0] = CHAIN + BOMB
+    s[3][3] = CHAIN
+    hit = solver._blast(g, s, {(0, 0)})
+    assert (2, 2) in hit and (4, 4) in hit
+    s[0][0] = CHAIN + CROSS
+    hit = solver._blast(g, s, {(0, 0)})
+    assert (3, 0) in hit and (0, 7) in hit
+
+    # Different counts are different sets.
+    g, s = board({})
+    s[0][0] = CHAIN
+    s[3][3] = 3 * CHAIN
+    assert solver._blast(g, s, {(0, 0)}) == {(0, 0)}
+
+    # A x3 piece survives with one use less; a x1 piece leaves.
+    g, s = board({})
+    s[2][2] = 3 * CHAIN
+    s[2][3] = CHAIN
+    colour = g[2][2]
+    solver._clear(g, s, {(2, 2), (2, 3)})
+    assert g[2][2] == colour and s[2][2] == 2 * CHAIN and g[2][3] == solver.EMPTY
+
+    # Chained pieces do not fall.
+    g, s = board({(4, 3): solver.EMPTY})
+    s[3][3] = CHAIN
+    colour = g[3][3]
+    solver._gravity(g, s)
+    assert g[3][3] == colour and g[4][3] == solver.EMPTY
+
+    # A match that fires a chain scores the whole set.
+    cells = {(6, 0): R, (6, 1): R, (5, 2): R}
+    g, s = board(cells)
+    plain = solver.simulate(g, s, (5, 2), (6, 2))
+    g, s = board(cells)
+    s[6][0] = CHAIN
+    s[0][7] = CHAIN
+    s[0][4] = CHAIN
+    assert solver.simulate(g, s, (5, 2), (6, 2)) > plain
 
     print("solver rules ok")
 

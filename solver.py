@@ -10,6 +10,11 @@ Rules (in-game effects panel):
   ice                 -> removed by one elimination around it; never falls or moves
   hourglass           -> removed on reaching the bottom row, gives two turns; it can
                          be swapped (the game's own hint does this) but never matches
+  chain xN (skills)   -> linked pieces fire together and share bomb and cross effects;
+                         they do not fall, and leave after N eliminations
+
+The game does not show which chained pieces belong together, but a set fires as
+one, so pieces with the same count are treated as one set.
 
 Refill is unknown, so the simulation applies gravity without new pieces. In the
 game pieces also flow around ice to fill the gaps under it; that is not modelled.
@@ -17,7 +22,7 @@ Bottles and ice are never dragged and never match. "Around" means the four
 orthogonal neighbours (confirmed in game: diagonal ice survives), with at most
 one hit per elimination step.
 """
-from vision import ROWS, COLS, U, E, ICE, HOUR, X, NONE, BOMB, CROSS, HEARTS
+from vision import ROWS, COLS, U, E, ICE, HOUR, X, NONE, BOMB, CROSS, HEARTS, CHAIN
 
 EMPTY = -2
 BONUS = {BOMB: 4.0, CROSS: 7.0, "U": 12.0}
@@ -87,15 +92,26 @@ def _blast(g, s, clear):
     """Grow a clear set through special pieces; bottles in the area are kept for _hit."""
     todo = list(clear)
     seen = set(clear)
+    fired = set()
     while todo:
         r, c = todo.pop()
-        kind = s[r][c]
-        if kind == BOMB:
-            area = [(r + a, c + b) for a in (-1, 0, 1) for b in (-1, 0, 1)]
-        elif kind == CROSS:
-            area = [(r, i) for i in range(COLS)] + [(i, c) for i in range(ROWS)]
-        else:
-            continue
+        kinds = {s[r][c] % CHAIN}
+        uses = s[r][c] // CHAIN
+        if uses:
+            linked = [(a, b) for a in range(ROWS) for b in range(COLS)
+                      if s[a][b] // CHAIN == uses and g[a][b] != EMPTY]
+            kinds |= {s[a][b] % CHAIN for a, b in linked}
+            if uses not in fired:
+                fired.add(uses)
+                for p in linked:
+                    if p not in seen:
+                        seen.add(p)
+                        todo.append(p)
+        area = []
+        if BOMB in kinds:
+            area += [(r + a, c + b) for a in (-1, 0, 1) for b in (-1, 0, 1)]
+        if CROSS in kinds:
+            area += [(r, i) for i in range(COLS)] + [(i, c) for i in range(ROWS)]
         for p in area:
             if 0 <= p[0] < ROWS and 0 <= p[1] < COLS and p not in seen and g[p[0]][p[1]] not in UNBLASTABLE:
                 seen.add(p)
@@ -119,7 +135,7 @@ def _hit(g, s, cleared):
                 continue
             s[r][c] -= 1
             bonus += BOTTLE_HIT
-            if s[r][c] <= HEARTS:
+            if s[r][c] % CHAIN <= HEARTS:
                 g[r][c], s[r][c] = EMPTY, NONE
                 bonus += BOTTLE_POP
     return bonus
@@ -129,7 +145,7 @@ def _gravity(g, s):
     for c in range(COLS):
         w = ROWS - 1
         for r in range(ROWS - 1, -1, -1):
-            if g[r][c] in (X, ICE):
+            if g[r][c] in (X, ICE) or s[r][c] >= CHAIN:
                 w = r - 1
             elif g[r][c] != EMPTY:
                 if w != r:
@@ -157,7 +173,10 @@ def _rows_to_go(g):
 
 def _clear(g, s, cells):
     for r, c in cells:
-        g[r][c], s[r][c] = EMPTY, NONE
+        if s[r][c] // CHAIN > 1:     # a chained piece stays until its uses run out
+            s[r][c] -= CHAIN
+        else:
+            g[r][c], s[r][c] = EMPTY, NONE
 
 
 def simulate(g0, s0, a, b):

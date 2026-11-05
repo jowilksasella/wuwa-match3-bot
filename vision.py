@@ -16,6 +16,7 @@ X0, DX, Y0, DY = 620.0, 82.3, 130.0, 81.7
 G, M, R, B, W, U, E, ICE, HOUR, X = 0, 1, 2, 3, 4, 5, 6, 7, 8, -1
 NONE, BOMB, CROSS = 0, 1, 2
 HEARTS = 10     # a bottle's special value is HEARTS + its remaining hits
+CHAIN = 100     # a chained piece adds CHAIN x its remaining uses to its special value
 NAMES = {G: "G", M: "M", R: "R", B: "B", W: "W", U: "U", E: "E", ICE: "I", HOUR: "H", X: "?"}
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -112,27 +113,86 @@ def _specials(hsv):
     return torch.where(frame, torch.full_like(edge, NONE), out)
 
 
+def _crimson(hsv):
+    """The chain badge's star, a pure crimson no ordinary piece uses."""
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    return ((h >= 170) | (h <= 1)) & (s > 190) & (v > 180)
+
+
+def _white(hsv):
+    return (hsv[..., 1] < 70) & (hsv[..., 2] > 190)
+
+
+def _digit_window(white, cx, cy):
+    """The digit sits a fixed distance right of the star's centre."""
+    return white[cy - 6:cy + 8, cx + 6:cx + 17]
+
+
+@torch.inference_mode()
+def _load_digits():
+    digits = {}
+    for n in (1, 2, 3):
+        path = os.path.join(_ASSETS, f"chain{n}.png")
+        t = torch.from_numpy(cv2.imdecode(np.fromfile(path, np.uint8), 1)).to(DEVICE)
+        hsv = _hsv(t)
+        ys, xs = _crimson(hsv).nonzero(as_tuple=True)
+        digits[n] = _digit_window(_white(hsv), int(xs.float().mean()), int(ys.float().mean()))
+    return digits
+
+
+def _read_digit(white, cx, cy):
+    """Match the digit against the saved badges, allowing a pixel of drift."""
+    scores = {}
+    for n, tmpl in _DIGITS.items():
+        scores[n] = min(int((_digit_window(white, cx + dx, cy + dy) != tmpl).sum())
+                        for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+    return min(scores, key=scores.get)
+
+
+def _chains(hsv):
+    """Remaining uses of each cell's chain badge, 0 for no badge."""
+    crimson = _crimson(hsv)
+    box = (6, -28, 24, -8)
+    found = (_patches(crimson, box).sum(1) >= 20).nonzero().flatten().tolist()
+    out = torch.zeros(ROWS * COLS, dtype=torch.long, device=DEVICE)
+    white = _white(hsv)
+    for i in found:
+        x0, y0 = int(_CX[i]) + box[0], int(_CY[i]) + box[1]
+        ys, xs = crimson[y0:int(_CY[i]) + box[3], x0:int(_CX[i]) + box[2]].nonzero(as_tuple=True)
+        out[i] = _read_digit(white, x0 + int(xs.float().mean()), y0 + int(ys.float().mean()))
+    return out
+
+
 @torch.inference_mode()
 def read_board(img):
     hsv = _hsv(torch.from_numpy(img).to(DEVICE))
     k = _classify(hsv)
     s = _specials(hsv)
     s = torch.where((k == X) | (k == U) | (k == ICE) | (k == HOUR), torch.full_like(s, NONE), s)
-    s = torch.where(k == E, HEARTS + _hearts(hsv), s)
+    s = torch.where(k == E, HEARTS + _hearts(hsv), s) + CHAIN * _chains(hsv)
     k, s = k.tolist(), s.tolist()
     return ([k[r * COLS:(r + 1) * COLS] for r in range(ROWS)],
             [s[r * COLS:(r + 1) * COLS] for r in range(ROWS)])
 
 
+_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+_DIGITS = _load_digits()
 _BTN_BOX = (20, 52, 950, 1082)   # y0, y1, x0, x1 of the effects-panel button
-_btn = cv2.imdecode(np.fromfile(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                             "assets", "button.png"), np.uint8), 1).astype(int)
+
+
+def _button_text(bgr):
+    """White lettering of the button. Its colour changes with the character theme; the text does not."""
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    return (hsv[..., 1] < 60) & (hsv[..., 2] > 215)
+
+
+_btn = _button_text(cv2.imdecode(np.fromfile(os.path.join(_ASSETS, "button.png"), np.uint8), 1))
 
 
 def in_level(img):
     """True only on the live board: the HUD button and the panel border are both undimmed."""
     y0, y1, x0, x1 = _BTN_BOX
-    if np.abs(img[y0:y1, x0:x1].astype(int) - _btn).mean() > 15:
+    if (_button_text(img[y0:y1, x0:x1]) != _btn).mean() > 0.05:
         return False
     border = (np.median(img[680:684, 600:1220].reshape(-1, 3), axis=0),
               np.median(img[120:640, 1254:1258].reshape(-1, 3), axis=0))
@@ -150,5 +210,9 @@ def turn_changed(a, b):
 
 def fmt(colors, specials):
     mark = {NONE: " ", BOMB: "*", CROSS: "+"}
-    return "\n".join(" ".join(NAMES[k] + mark.get(s, str(s - HEARTS)) for k, s in zip(a, b))
-                     for a, b in zip(colors, specials))
+
+    def cell(k, s):
+        base = s % CHAIN
+        return f"{NAMES[k]}{mark.get(base, str(base - HEARTS))}{s // CHAIN or ' '}"
+
+    return "\n".join(" ".join(cell(k, s) for k, s in zip(a, b)) for a, b in zip(colors, specials))

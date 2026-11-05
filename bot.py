@@ -74,7 +74,7 @@ def unknown_count(g):
 
 
 def bottles(g, s):
-    return sorted((s[r][c] - vision.HEARTS for r in range(vision.ROWS) for c in range(vision.COLS)
+    return sorted((s[r][c] % vision.CHAIN - vision.HEARTS for r in range(vision.ROWS) for c in range(vision.COLS)
                    if g[r][c] == vision.E), reverse=True)
 
 
