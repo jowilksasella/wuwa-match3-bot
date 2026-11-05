@@ -1,6 +1,6 @@
 """Rule checks for the solver: python test_solver.py"""
 import solver
-from vision import ROWS, COLS, G, R, B, W, M, E, ICE, U, X, NONE, HEARTS
+from vision import ROWS, COLS, G, R, B, W, M, E, ICE, HOUR, U, X, NONE, HEARTS
 
 
 
@@ -76,6 +76,25 @@ def main():
     plain = solver.simulate(g, s, (5, 2), (6, 2))
     g, s = board({**cells, (5, 0): ICE})
     assert solver.simulate(g, s, (5, 2), (6, 2)) > plain
+
+    # A clear under an hourglass drops it out of the bottom row, and the search takes it.
+    cells = {(6, 0): G, (6, 1): R, (6, 2): G, (6, 3): G, (5, 1): HOUR}
+    g, s = board(cells)
+    assert solver.simulate(g, s, (6, 0), (6, 1)) >= solver.HOUR_EXIT
+    assert solver.best_move(g, s)[0] == ((6, 0), (6, 1))
+
+    # Falling part of the way scores by rows, below a full exit.
+    g, s = board({(6, 0): G, (6, 1): R, (6, 2): G, (6, 3): G, (4, 1): HOUR})
+    v = solver.simulate(g, s, (6, 0), (6, 1))
+    assert solver.HOUR_ROW <= v < solver.HOUR_EXIT
+
+    # Hourglasses swap but never match, and the ultimate cannot target one.
+    g, s = board({(3, 0): R, (3, 1): R, (2, 2): R, (3, 2): HOUR})
+    assert solver.simulate(g, s, (2, 2), (3, 2)) is not None
+    g, s = board({(6, 0): HOUR, (6, 1): HOUR, (6, 2): HOUR})
+    assert not solver._groups(g)
+    g, s = board({(3, 3): U, (3, 4): HOUR})
+    assert solver.simulate(g, s, (3, 3), (3, 4)) is None
 
     print("solver rules ok")
 

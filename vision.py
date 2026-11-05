@@ -12,11 +12,11 @@ import torch
 ROWS, COLS = 7, 8
 X0, DX, Y0, DY = 620.0, 82.3, 130.0, 81.7
 
-# green, mask, red, blue, white, ultimate, energy bottle, ice, unknown
-G, M, R, B, W, U, E, ICE, X = 0, 1, 2, 3, 4, 5, 6, 7, -1
+# green, mask, red, blue, white, ultimate, energy bottle, ice, hourglass, unknown
+G, M, R, B, W, U, E, ICE, HOUR, X = 0, 1, 2, 3, 4, 5, 6, 7, 8, -1
 NONE, BOMB, CROSS = 0, 1, 2
 HEARTS = 10     # a bottle's special value is HEARTS + its remaining hits
-NAMES = {G: "G", M: "M", R: "R", B: "B", W: "W", U: "U", E: "E", ICE: "I", X: "?"}
+NAMES = {G: "G", M: "M", R: "R", B: "B", W: "W", U: "U", E: "E", ICE: "I", HOUR: "H", X: "?"}
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEVICE_NAME = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU (no CUDA GPU found)"
@@ -74,6 +74,9 @@ def _classify(hsv):
     out = torch.where(white > 0.25, torch.full_like(out, W), out)
     # Ice is one flat teal (hue 89-92); the blue whale peaks near 98 and has warm pixels.
     out = torch.where(frac(85, 96) > 0.6, torch.full_like(out, ICE), out)
+    # The hourglass is the only piece with a large area of bright gold (>= 0.25, others <= 0.07).
+    gold = ((h >= 18) & (h < 33) & (s > 120) & (v > 170)).float().mean(1)
+    out = torch.where(gold > 0.18, torch.full_like(out, HOUR), out)
     # Both are pink with white highlights: only the ultimate has cyan stripes.
     out = torch.where((pink > 0.30) & (white > 0.08) & (cyan >= 0.03), torch.full_like(out, U), out)
     out = torch.where((pink > 0.45) & (white > 0.15) & (cyan < 0.03), torch.full_like(out, E), out)
@@ -114,7 +117,7 @@ def read_board(img):
     hsv = _hsv(torch.from_numpy(img).to(DEVICE))
     k = _classify(hsv)
     s = _specials(hsv)
-    s = torch.where((k == X) | (k == U) | (k == ICE), torch.full_like(s, NONE), s)
+    s = torch.where((k == X) | (k == U) | (k == ICE) | (k == HOUR), torch.full_like(s, NONE), s)
     s = torch.where(k == E, HEARTS + _hearts(hsv), s)
     k, s = k.tolist(), s.tolist()
     return ([k[r * COLS:(r + 1) * COLS] for r in range(ROWS)],

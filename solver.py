@@ -8,6 +8,8 @@ Rules (in-game effects panel):
   energy bottle       -> removed after three eliminations around it, gives 80 energy;
                          it is the goal of some levels
   ice                 -> removed by one elimination around it; never falls or moves
+  hourglass           -> removed on reaching the bottom row, gives two turns; it can
+                         be swapped (the game's own hint does this) but never matches
 
 Refill is unknown, so the simulation applies gravity without new pieces. In the
 game pieces also flow around ice to fill the gaps under it; that is not modelled.
@@ -15,15 +17,16 @@ Bottles and ice are never dragged and never match. "Around" means the four
 orthogonal neighbours (confirmed in game: diagonal ice survives), with at most
 one hit per elimination step.
 """
-from vision import ROWS, COLS, U, E, ICE, X, NONE, BOMB, CROSS, HEARTS
+from vision import ROWS, COLS, U, E, ICE, HOUR, X, NONE, BOMB, CROSS, HEARTS
 
 EMPTY = -2
 BONUS = {BOMB: 4.0, CROSS: 7.0, "U": 12.0}
 BOTTLE_HIT, BOTTLE_POP = 8.0, 16.0     # worth more than any plain match
 ICE_HIT = 3.0                          # opens the board; about one extra matched piece each way
-UNMATCHABLE = (U, E, ICE)
+HOUR_EXIT, HOUR_ROW = 30.0, 5.0        # turns are the scarcest thing on hourglass levels
+UNMATCHABLE = (U, E, ICE, HOUR)
 UNDRAGGABLE = (X, E, ICE)
-UNBLASTABLE = (X, EMPTY, E, ICE)       # these take hits through _hit instead
+UNBLASTABLE = (X, EMPTY, E, ICE, HOUR)   # bottles and ice take hits through _hit instead
 
 
 def _runs(g):
@@ -135,6 +138,23 @@ def _gravity(g, s):
                 w -= 1
 
 
+def _settle(g, s):
+    """Apply gravity and remove hourglasses that reach the bottom; returns the score."""
+    bonus = 0.0
+    _gravity(g, s)
+    while HOUR in g[ROWS - 1]:
+        for c in range(COLS):
+            if g[ROWS - 1][c] == HOUR:
+                g[ROWS - 1][c] = EMPTY
+                bonus += HOUR_EXIT
+        _gravity(g, s)
+    return bonus
+
+
+def _rows_to_go(g):
+    return sum(ROWS - 1 - r for r in range(ROWS) for c in range(COLS) if g[r][c] == HOUR)
+
+
 def _clear(g, s, cells):
     for r, c in cells:
         g[r][c], s[r][c] = EMPTY, NONE
@@ -146,9 +166,10 @@ def simulate(g0, s0, a, b):
     s = [row[:] for row in s0]
     (r1, c1), (r2, c2) = a, b
     k1, k2 = g[r1][c1], g[r2][c2]
-    if k1 in UNDRAGGABLE or k2 in UNDRAGGABLE:
+    if k1 in UNDRAGGABLE or k2 in UNDRAGGABLE or {k1, k2} == {U, HOUR}:
         return None
     total = bonus = 0.0
+    rows_before = _rows_to_go(g)
     if U in (k1, k2):
         if k1 == k2:
             cells = {(r, c) for r in range(ROWS) for c in range(COLS) if g[r][c] not in UNBLASTABLE}
@@ -160,7 +181,7 @@ def simulate(g0, s0, a, b):
         total += len(cells)
         bonus += _hit(g, s, cells)
         _clear(g, s, cells)
-        _gravity(g, s)
+        bonus += _settle(g, s)
     else:
         g[r1][c1], g[r2][c2] = k2, k1
         s[r1][c1], s[r2][c2] = s[r2][c2], s[r1][c1]
@@ -189,8 +210,9 @@ def simulate(g0, s0, a, b):
                 g[r][c], s[r][c] = U, NONE
             else:
                 g[r][c], s[r][c] = color, kind
-        _gravity(g, s)
+        bonus += _settle(g, s)
         first = False
+    bonus += HOUR_ROW * (rows_before - _rows_to_go(g))
     depth = (r1 + r2) / 2 / (ROWS - 1)   # lower moves shake more of the board
     return total + bonus + 0.3 * depth
 
