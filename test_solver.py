@@ -27,7 +27,7 @@ def main():
     assert solver._hit(g, s, {(2, 3)}) == solver.BOTTLE_HIT + solver.BOTTLE_POP
     assert g[3][3] == solver.EMPTY
 
-    # A diagonal neighbour is not a hit under the orthogonal assumption.
+    # A diagonal neighbour is not a hit (confirmed in game).
     g, s = board({})
     bottle(g, s, 3, 3, 3)
     assert solver._hit(g, s, {(2, 2)}) == 0

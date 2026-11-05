@@ -9,9 +9,11 @@ Rules (in-game effects panel):
                          it is the goal of some levels
   ice                 -> removed by one elimination around it; never falls or moves
 
-Refill is unknown, so the simulation applies gravity without new pieces.
-Bottles and ice are never dragged and never match. "Around" is modelled as the
-four orthogonal neighbours, with at most one hit per elimination step.
+Refill is unknown, so the simulation applies gravity without new pieces. In the
+game pieces also flow around ice to fill the gaps under it; that is not modelled.
+Bottles and ice are never dragged and never match. "Around" means the four
+orthogonal neighbours (confirmed in game: diagonal ice survives), with at most
+one hit per elimination step.
 """
 from vision import ROWS, COLS, U, E, ICE, X, NONE, BOMB, CROSS, HEARTS
 
